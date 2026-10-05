@@ -1,25 +1,23 @@
-# Teams Incoming Call Monitor
+# Clio - Teams Incoming Call Monitor
 
 This Python daemon receives authenticated incoming-call callbacks for a
 Microsoft Teams calling bot and prints the caller's phone number. If the number
 matches `phonebook.csv`, it prints the caller's name instead.
 
-This is not a subscription to calls ringing a person's existing Teams client.
-Microsoft exposes incoming-call notifications to a registered calling bot
-when a call is addressed to that bot. A Teams administrator must configure the
-bot, enable calling, and publish the callback as a publicly reachable HTTPS
-URL. This monitor does not answer, reject, or otherwise control calls.
+Clio currently has three versions, with each one being tailored to different use cases:
 
-## Local desktop fallback
+| Version   | Current status |
+|-----------|----------------|
+| Windows   | Tested, works  |
+| NixOS     | Untested       |
+| Teams Bot | Untested       |
 
-If you cannot install a custom Teams app, try `teams_desktop_monitor.py` on the
-Windows computer where you are signed in to the Teams desktop client:
-
+## Windows
 ```powershell
 python teams_desktop_monitor.py
 ```
 
-This uses Windows UI Automation to inspect accessible text in Teams windows;
+The initial version of Clio. This uses Windows UI Automation to inspect accessible text in Teams windows;
 it needs no Teams app registration, public URL, or callback credentials. Keep
 Teams running and signed in. The UI can change between Teams versions, and
 caller details might not be exposed to UI Automation, so this is an
@@ -56,6 +54,14 @@ call-only overlay inside a browser tab. The session bus must permit the
 it. A portal removal or `NotificationClosed` means the desktop notification
 closed, which does not prove whether the call was answered, cancelled, or
 timed out.
+
+## Teams Bot
+An implementation of Clio for use as a registered Microsoft Teams calling bot.
+Microsoft exposes incoming-call notifications to the bot when a call is addressed it. 
+
+In order for Clio to work in this form, a Teams administrator must configure the
+bot, enable calling, and publish the callback as a publicly reachable HTTPS
+URL. This monitor does not answer, reject, or otherwise control calls.
 
 ## Phonebook
 
@@ -98,12 +104,6 @@ The callback bearer token is checked against Microsoft's published signing
 keys, issuer, expiration, and the configured app ID audience before its JSON
 body is processed. The callback responds with HTTP 204, as required by the
 calling notification protocol.
-
-## Test
-
-```powershell
-python -m unittest -v
-```
 
 Microsoft setup references:
 
