@@ -60,6 +60,12 @@ it. A portal removal or `NotificationClosed` means the desktop notification
 closed, which does not prove whether the call was answered, cancelled, or
 timed out.
 
+For troubleshooting, set `CALL_MONITOR_DEBUG_NOTIFICATIONS=1` before starting
+the daemon. It logs whether the monitor connected, each standard/portal
+notification observed, and whether it matched the call filter. Debug output
+includes notification title/body and may contain caller details; keep it
+private and unset the variable after testing.
+
 ### Teams for Linux Integration
 
 If you use Teams for Linux, prefer its incoming-call command hook over the

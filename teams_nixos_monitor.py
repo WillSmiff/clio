@@ -209,6 +209,10 @@ def parse_portal_call_notification(notification, phonebook):
     return caller_from_notification(summary, body, phonebook)
 
 
+def debug_notifications_enabled():
+    return os.environ.get("CALL_MONITOR_DEBUG_NOTIFICATIONS") == "1"
+
+
 class NotificationCallTracker:
     def __init__(self, phonebook):
         self.phonebook = phonebook
@@ -242,6 +246,17 @@ class NotificationCallTracker:
             and message.member == "Notify"
         ):
             notification = parse_call_notification(message.body, self.phonebook)
+            if debug_notifications_enabled():
+                app_name = message.body[0] if len(message.body) > 0 else ""
+                summary = message.body[3] if len(message.body) > 3 else ""
+                body = message.body[4] if len(message.body) > 4 else ""
+                LOGGER.info(
+                    "D-Bus Notify observed: app=%r title=%r body=%r call_match=%s",
+                    app_name,
+                    clean_text(summary),
+                    clean_text(body),
+                    notification is not None,
+                )
             if notification:
                 self.pending_notifications[(message.sender, message.serial)] = notification
             return []
@@ -255,6 +270,12 @@ class NotificationCallTracker:
         ):
             notification_id = str(message.body[0])
             caller = parse_portal_call_notification(message.body[1], self.phonebook)
+            if debug_notifications_enabled():
+                LOGGER.info(
+                    "XDG portal notification observed: id=%r call_match=%s",
+                    notification_id,
+                    caller is not None,
+                )
             if caller:
                 return self.start_notification(("portal", notification_id), caller)
             return []
@@ -312,8 +333,11 @@ class NotificationCallTracker:
 def handle_monitor_message(message, tracker):
     from dbus_next import MessageType
 
-    for output in tracker.handle_message(message):
-        print(output, flush=True)
+    try:
+        for output in tracker.handle_message(message):
+            print(output, flush=True)
+    except Exception:
+        LOGGER.exception("Failed to process a monitored D-Bus message")
 
     # A monitor connection cannot reply to observed method calls. Returning
     # True consumes those messages; method returns must pass through so
@@ -349,7 +373,9 @@ async def run_monitor(phonebook):
                 "allow notification monitoring."
             )
 
-        LOGGER.info("Monitoring session-bus desktop notifications for incoming calls")
+        LOGGER.info(
+            "Session D-Bus monitor connected; watching desktop notification calls"
+        )
         await stop_event.wait()
         LOGGER.info("Stopping NixOS Teams call monitor")
     finally:
