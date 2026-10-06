@@ -54,6 +54,14 @@ def clean_text(value):
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", value or ""))).strip()
 
 
+def full_phone_number(value):
+    value = clean_text(value)
+    if not PHONE_PATTERN.fullmatch(value):
+        return None
+    normalized = normalize_number(value)
+    return normalized if 7 <= len(normalized) <= 15 else None
+
+
 def caller_from_notification(summary, body, phonebook):
     summary = clean_text(summary)
     body = clean_text(body)
@@ -126,6 +134,15 @@ def parse_call_notification(arguments, phonebook):
     summary = clean_text(summary)
     body = clean_text(body)
     has_call_text = bool(CALL_TEXT_PATTERN.search(f"{summary} {body}"))
+    app_name_text = clean_text(app_name).casefold()
+    title_number = full_phone_number(summary)
+    body_number = full_phone_number(body)
+    has_repeated_caller_number = (
+        "teams" in app_name_text
+        and "linux" in app_name_text
+        and title_number is not None
+        and title_number == body_number
+    )
 
     action_labels = [str(action).casefold() for action in actions]
     has_answer_action = any(
@@ -135,7 +152,11 @@ def parse_call_notification(arguments, phonebook):
         re.search(r"\b(?:decline|reject|ignore)\b", action)
         for action in action_labels
     )
-    if not has_call_text and not (has_answer_action and has_decline_action):
+    if not (
+        has_call_text
+        or (has_answer_action and has_decline_action)
+        or has_repeated_caller_number
+    ):
         return None
 
     caller = caller_from_notification(summary, body, phonebook)
