@@ -3,9 +3,9 @@ import html
 import logging
 import os
 import re
-
-from dbus_next import Message, MessageType
-from dbus_next.aio import MessageBus
+import signal
+import sys
+from pathlib import Path
 
 from phonebook import load_phonebook, normalize_number
 
@@ -72,6 +72,30 @@ def caller_from_notification(summary, body, phonebook):
         if text and text.casefold() not in GENERIC_CALL_TEXT:
             return text
 
+    return "Caller ID unavailable"
+
+
+def incoming_call_caller(caller, text, phonebook):
+    caller = clean_text(caller)
+    text = clean_text(text)
+
+    for candidate in (caller, text):
+        for match in PHONE_PATTERN.finditer(candidate):
+            number = match.group().strip()
+            normalized = normalize_number(number)
+            if not 7 <= len(normalized) <= 15:
+                continue
+            known_name = phonebook.get(normalized)
+            if known_name:
+                return known_name
+            if candidate == caller and text and normalize_number(text) != normalized:
+                return text
+            return number
+
+    if caller:
+        return caller
+    if text:
+        return text
     return "Caller ID unavailable"
 
 
@@ -169,6 +193,8 @@ class NotificationCallTracker:
         return [f"Incoming call stopped ringing from {caller}"]
 
     def handle_message(self, message):
+        from dbus_next import MessageType
+
         if (
             message.message_type == MessageType.METHOD_CALL
             and message.destination == NOTIFICATIONS_INTERFACE
@@ -244,6 +270,9 @@ class NotificationCallTracker:
 
 
 async def run_monitor(phonebook):
+    from dbus_next import Message, MessageType
+    from dbus_next.aio import MessageBus
+
     bus = await MessageBus().connect()
     tracker = NotificationCallTracker(phonebook)
 
@@ -253,31 +282,68 @@ async def run_monitor(phonebook):
         return False
 
     bus.add_message_handler(handle_message)
-    reply = await bus.call(
-        Message(
-            destination="org.freedesktop.DBus",
-            path="/org/freedesktop/DBus",
-            interface="org.freedesktop.DBus.Monitoring",
-            member="BecomeMonitor",
-            signature="asu",
-            body=[MONITOR_RULES, 0],
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+    loop.add_signal_handler(signal.SIGINT, stop_event.set)
+    loop.add_signal_handler(signal.SIGTERM, stop_event.set)
+    try:
+        reply = await bus.call(
+            Message(
+                destination="org.freedesktop.DBus",
+                path="/org/freedesktop/DBus",
+                interface="org.freedesktop.DBus.Monitoring",
+                member="BecomeMonitor",
+                signature="asu",
+                body=[MONITOR_RULES, 0],
+            )
         )
-    )
-    if reply.message_type == MessageType.ERROR:
-        bus.disconnect()
-        raise RuntimeError(
-            "The session D-Bus rejected BecomeMonitor; this desktop bus may not "
-            "allow notification monitoring."
-        )
+        if reply.message_type == MessageType.ERROR:
+            raise RuntimeError(
+                "The session D-Bus rejected BecomeMonitor; this desktop bus may not "
+                "allow notification monitoring."
+            )
 
-    LOGGER.info("Monitoring session-bus desktop notifications for incoming calls")
-    await asyncio.Future()
+        LOGGER.info("Monitoring session-bus desktop notifications for incoming calls")
+        await stop_event.wait()
+        LOGGER.info("Stopping NixOS Teams call monitor")
+    finally:
+        loop.remove_signal_handler(signal.SIGINT)
+        loop.remove_signal_handler(signal.SIGTERM)
+        bus.disconnect()
+        try:
+            await bus.wait_for_disconnect()
+        except EOFError:
+            LOGGER.debug("Session D-Bus connection closed")
+
+
+def run_incoming_call_command(arguments, phonebook):
+    caller = arguments[0] if arguments else ""
+    text = arguments[1] if len(arguments) > 1 else ""
+    display_name = incoming_call_caller(caller, text, phonebook)
+    print(f"Incoming call from {display_name}", flush=True)
+
+    def report_call_ended(_signum, _frame):
+        print(f"Incoming call stopped ringing from {display_name}", flush=True)
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, report_call_ended)
+    try:
+        while True:
+            signal.pause()
+    except KeyboardInterrupt:
+        LOGGER.info("Stopping incoming-call command")
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    phonebook_path = os.environ.get("PHONEBOOK_PATH", "phonebook.csv")
+    phonebook_path = os.environ.get(
+        "PHONEBOOK_PATH", str(Path(__file__).with_name("phonebook.csv"))
+    )
     phonebook = load_phonebook(phonebook_path)
+    if len(sys.argv) > 1 and sys.argv[1] == "--incoming-call":
+        run_incoming_call_command(sys.argv[2:], phonebook)
+        return
+
     try:
         asyncio.run(run_monitor(phonebook))
     except KeyboardInterrupt:

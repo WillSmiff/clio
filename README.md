@@ -57,6 +57,32 @@ it. A portal removal or `NotificationClosed` means the desktop notification
 closed, which does not prove whether the call was answered, cancelled, or
 timed out.
 
+### Teams for Linux Integration
+
+If you use Teams for Linux, prefer its incoming-call command hook over the
+notification-bus watcher. Add this to its user `config.json`, replacing the
+paths with the actual interpreter and script locations:
+
+```json
+{
+	"incomingCalls": {
+		"command": "/run/current-system/sw/bin/python3",
+		"commandArgs": [
+			"/home/YOUR_USER/CallerID/teams_nixos_monitor.py",
+			"--incoming-call"
+		]
+	}
+}
+```
+
+Teams for Linux appends the caller and text as arguments. The script prints the
+incoming event, then prints the stopped-ringing event when Teams terminates
+the child process. It prefers a phonebook match, then the caller name supplied
+by Teams, then the number. This mode needs only Python's standard library;
+`dbus-next` is required only for the notification-bus mode above. Use a
+Teams for Linux version that includes its incoming PSTN/call-queue detection
+fix (v2.24.0 or newer).
+
 ## Phonebook
 
 Edit `phonebook.csv` and keep its header as `phone,name`. Use E.164 numbers,
