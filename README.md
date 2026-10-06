@@ -83,6 +83,17 @@ by Teams, then the number. This mode needs only Python's standard library;
 Teams for Linux version that includes its incoming PSTN/call-queue detection
 fix (v2.24.0 or newer).
 
+Teams for Linux captures child stdout/stderr, so command-mode events are also
+appended to `~/.local/state/callerid/teams-calls.log` with private file
+permissions. Follow the log with:
+
+```sh
+tail -f ~/.local/state/callerid/teams-calls.log
+```
+
+Set `CALL_MONITOR_LOG` to choose another log path. Caller names and numbers are
+personal data; keep the log private and remove it when no longer needed.
+
 ## Phonebook
 
 Edit `phonebook.csv` and keep its header as `phone,name`. Use E.164 numbers,

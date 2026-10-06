@@ -5,6 +5,7 @@ import os
 import re
 import signal
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from phonebook import load_phonebook, normalize_number
@@ -97,6 +98,24 @@ def incoming_call_caller(caller, text, phonebook):
     if text:
         return text
     return "Caller ID unavailable"
+
+
+def log_call_message(message):
+    print(message, flush=True)
+    default_log_path = Path.home() / ".local" / "state" / "callerid" / "teams-calls.log"
+    log_path = Path(os.environ.get("CALL_MONITOR_LOG", default_log_path))
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(
+            log_path,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o600,
+        )
+        with os.fdopen(descriptor, "a", encoding="utf-8") as log_file:
+            timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+            log_file.write(f"{timestamp} {message}\n")
+    except OSError as error:
+        LOGGER.error("Could not write call log %s: %s", log_path, error)
 
 
 def parse_call_notification(arguments, phonebook):
@@ -320,10 +339,10 @@ def run_incoming_call_command(arguments, phonebook):
     caller = arguments[0] if arguments else ""
     text = arguments[1] if len(arguments) > 1 else ""
     display_name = incoming_call_caller(caller, text, phonebook)
-    print(f"Incoming call from {display_name}", flush=True)
+    log_call_message(f"Incoming call from {display_name}")
 
     def report_call_ended(_signum, _frame):
-        print(f"Incoming call stopped ringing from {display_name}", flush=True)
+        log_call_message(f"Incoming call stopped ringing from {display_name}")
         raise SystemExit(0)
 
     signal.signal(signal.SIGTERM, report_call_ended)
