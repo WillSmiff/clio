@@ -309,19 +309,25 @@ class NotificationCallTracker:
         return []
 
 
+def handle_monitor_message(message, tracker):
+    from dbus_next import MessageType
+
+    for output in tracker.handle_message(message):
+        print(output, flush=True)
+
+    # A monitor connection cannot reply to observed method calls. Returning
+    # True consumes those messages; method returns must pass through so
+    # MessageBus.call() can complete the BecomeMonitor handshake.
+    return message.message_type == MessageType.METHOD_CALL
+
+
 async def run_monitor(phonebook):
     from dbus_next import Message, MessageType
     from dbus_next.aio import MessageBus
 
     bus = await MessageBus().connect()
     tracker = NotificationCallTracker(phonebook)
-
-    def handle_message(message):
-        for output in tracker.handle_message(message):
-            print(output, flush=True)
-        return False
-
-    bus.add_message_handler(handle_message)
+    bus.add_message_handler(lambda message: handle_monitor_message(message, tracker))
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     loop.add_signal_handler(signal.SIGINT, stop_event.set)
