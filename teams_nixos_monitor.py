@@ -250,12 +250,12 @@ class NotificationCallTracker:
                 app_name = message.body[0] if len(message.body) > 0 else ""
                 summary = message.body[3] if len(message.body) > 3 else ""
                 body = message.body[4] if len(message.body) > 4 else ""
-                LOGGER.info(
-                    "D-Bus Notify observed: app=%r title=%r body=%r call_match=%s",
-                    app_name,
-                    clean_text(summary),
-                    clean_text(body),
-                    notification is not None,
+                print(
+                    "D-Bus Notify observed: "
+                    f"app={app_name!r} title={clean_text(summary)!r} "
+                    f"body={clean_text(body)!r} "
+                    f"call_match={notification is not None}",
+                    flush=True,
                 )
             if notification:
                 self.pending_notifications[(message.sender, message.serial)] = notification
@@ -271,10 +271,10 @@ class NotificationCallTracker:
             notification_id = str(message.body[0])
             caller = parse_portal_call_notification(message.body[1], self.phonebook)
             if debug_notifications_enabled():
-                LOGGER.info(
-                    "XDG portal notification observed: id=%r call_match=%s",
-                    notification_id,
-                    caller is not None,
+                print(
+                    "XDG portal notification observed: "
+                    f"id={notification_id!r} call_match={caller is not None}",
+                    flush=True,
                 )
             if caller:
                 return self.start_notification(("portal", notification_id), caller)
@@ -349,7 +349,9 @@ async def run_monitor(phonebook):
     from dbus_next import Message, MessageType
     from dbus_next.aio import MessageBus
 
+    print("Connecting to the session D-Bus...", flush=True)
     bus = await MessageBus().connect()
+    print("Connected to the session D-Bus.", flush=True)
     tracker = NotificationCallTracker(phonebook)
     bus.add_message_handler(lambda message: handle_monitor_message(message, tracker))
     loop = asyncio.get_running_loop()
@@ -373,8 +375,9 @@ async def run_monitor(phonebook):
                 "allow notification monitoring."
             )
 
-        LOGGER.info(
-            "Session D-Bus monitor connected; watching desktop notification calls"
+        print(
+            "Session D-Bus monitor active; waiting for desktop notifications.",
+            flush=True,
         )
         await stop_event.wait()
         LOGGER.info("Stopping NixOS Teams call monitor")

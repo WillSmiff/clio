@@ -61,10 +61,11 @@ closed, which does not prove whether the call was answered, cancelled, or
 timed out.
 
 For troubleshooting, set `CALL_MONITOR_DEBUG_NOTIFICATIONS=1` before starting
-the daemon. It logs whether the monitor connected, each standard/portal
-notification observed, and whether it matched the call filter. Debug output
-includes notification title/body and may contain caller details; keep it
-private and unset the variable after testing.
+the daemon. Startup progress is printed to stdout. Debug mode also prints each
+standard/portal notification observed and whether it matched the call filter.
+Debug output includes notification title/body and may contain caller details;
+keep it private and unset the variable after testing. If launched by a user
+service, read stdout/stderr from that service's journal.
 
 ### Teams for Linux Integration
 
