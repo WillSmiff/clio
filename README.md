@@ -9,7 +9,7 @@ Clio currently has three versions, with each one being tailored to different use
 | Version   | Current status |
 |-----------|----------------|
 | Windows   | Tested, works  |
-| NixOS     | Untested       |
+| NixOS     | Tested, works  |
 | Teams Bot | Untested       |
 
 ## Windows
@@ -37,9 +37,12 @@ reliably distinguish pickup from caller cancellation or timeout.
 On NixOS, use `teams_nixos_monitor.py` instead of the Windows UI monitor. It
 listens on the logged-in user's session D-Bus for desktop notification
 requests through either `org.freedesktop.Notifications` or the XDG Desktop
-Portal, filters for incoming-call text/categories/actions, and tracks
-notification closure or removal. It does not use `journalctl`, Teams app
-permissions, a public URL, or bot credentials.
+Portal. For Teams for Linux's standard notification, it requires the app name
+`Microsoft Teams for Linux` and matching phone numbers in the title and message,
+allowing different spacing. Portal notifications use their incoming-call
+category or accept/decline action metadata. It tracks notification closure or
+removal. It does not use `journalctl`, Teams app permissions, a public URL, or
+bot credentials.
 
 Run it from the graphical login session so it can access that session's D-Bus:
 
@@ -55,6 +58,51 @@ it. A portal removal or `NotificationClosed` means the desktop notification
 closed, which does not prove whether the call was answered, cancelled, or
 timed out.
 
+For troubleshooting, set `CALL_MONITOR_DEBUG_NOTIFICATIONS=1` before starting
+the daemon. Startup progress is printed to stdout. Debug mode also prints each
+standard/portal notification observed and whether it matched the call filter.
+Debug output includes notification title/body and may contain caller details;
+keep it private and unset the variable after testing. If launched by a user
+service, read stdout/stderr from that service's journal.
+
+### Teams for Linux Integration
+
+If you use Teams for Linux, prefer its incoming-call command hook over the
+notification-bus watcher. Add this to its user `config.json`, replacing the
+paths with the actual interpreter and script locations:
+
+```json
+{
+	"incomingCalls": {
+		"command": "/run/current-system/sw/bin/python3",
+		"commandArgs": [
+			"/home/YOUR_USER/CallerID/teams_nixos_monitor.py",
+			"--incoming-call"
+		]
+	}
+}
+```
+
+Teams for Linux appends the caller and text as arguments. The script prints the
+incoming event, then prints the stopped-ringing event when Teams terminates
+the child process. It prefers a phonebook match, then the caller name supplied
+by Teams, then the number. This mode needs only Python's standard library;
+`dbus-next` is required only for the notification-bus mode above. Use a
+Teams for Linux version that includes its incoming PSTN/call-queue detection
+fix (v2.24.0 or newer).
+
+Teams for Linux captures child stdout/stderr, so command-mode events are also
+appended to `~/.local/state/callerid/teams-calls.log` with private file
+permissions. Follow the log with:
+
+```sh
+tail -f ~/.local/state/callerid/teams-calls.log
+```
+
+Set `CALL_MONITOR_LOG` to choose another log path. Caller names and numbers are
+personal data; keep the log private and remove it when no longer needed.
+
+
 ## Teams Bot
 An implementation of Clio for use as a registered Microsoft Teams calling bot.
 Microsoft exposes incoming-call notifications to the bot when a call is addressed it. 
@@ -62,19 +110,6 @@ Microsoft exposes incoming-call notifications to the bot when a call is addresse
 In order for Clio to work in this form, a Teams administrator must configure the
 bot, enable calling, and publish the callback as a publicly reachable HTTPS
 URL. This monitor does not answer, reject, or otherwise control calls.
-
-## Phonebook
-
-Edit `phonebook.csv` and keep its header as `phone,name`. Use E.164 numbers,
-including the country code, to avoid ambiguous local-number matches:
-
-```csv
-phone,name
-+12065550100,Avery Chen
-+442079460123,Sam Taylor
-```
-
-## Run
 
 Use Python 3.9 or later. From this directory:
 
@@ -104,6 +139,17 @@ The callback bearer token is checked against Microsoft's published signing
 keys, issuer, expiration, and the configured app ID audience before its JSON
 body is processed. The callback responds with HTTP 204, as required by the
 calling notification protocol.
+
+## Phonebook
+
+Edit `phonebook.csv` and keep its header as `phone,name`. Use E.164 numbers,
+including the country code, to avoid ambiguous local-number matches:
+
+```csv
+phone,name
++12065550100,Avery Chen
++442079460123,Sam Taylor
+```
 
 Microsoft setup references:
 

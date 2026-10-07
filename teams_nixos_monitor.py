@@ -3,9 +3,10 @@ import html
 import logging
 import os
 import re
-
-from dbus_next import Message, MessageType
-from dbus_next.aio import MessageBus
+import signal
+import sys
+from datetime import datetime
+from pathlib import Path
 
 from phonebook import load_phonebook, normalize_number
 
@@ -14,38 +15,21 @@ LOGGER = logging.getLogger("teams-nixos-monitor")
 NOTIFICATIONS_INTERFACE = "org.freedesktop.Notifications"
 PORTAL_INTERFACE = "org.freedesktop.portal.Notification"
 MONITOR_RULES = [
-    "type='method_call',destination='org.freedesktop.Notifications',"
-    "interface='org.freedesktop.Notifications',member='Notify'",
-    "type='method_return',sender='org.freedesktop.Notifications'",
+    "type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
+    "type='method_return'",
     "type='signal',interface='org.freedesktop.Notifications',"
     "member='NotificationClosed'",
-    "type='method_call',destination='org.freedesktop.portal.Desktop',"
-    "interface='org.freedesktop.portal.Notification',member='AddNotification'",
-    "type='method_call',destination='org.freedesktop.portal.Desktop',"
-    "interface='org.freedesktop.portal.Notification',member='RemoveNotification'",
+    "type='method_call',interface='org.freedesktop.portal.Notification',member='AddNotification'",
+    "type='method_call',interface='org.freedesktop.portal.Notification',member='RemoveNotification'",
     "type='signal',interface='org.freedesktop.portal.Notification',"
     "member='ActionInvoked'",
 ]
-CALL_TEXT_PATTERN = re.compile(
-    r"\b(?:incoming\s+(?:(?:audio|video)\s+)?call|"
-    r"(?:(?:audio|video)\s+)?call\s+from|is\s+calling|calling\s+you)\b",
-    re.IGNORECASE,
-)
 PHONE_PATTERN = re.compile(r"(?<!\w)(?:\+|00)\s*\d[\d\s().-]{4,}\d(?!\w)")
-CALLER_PREFIX_PATTERN = re.compile(
-    r"^\s*(?:incoming\s+(?:(?:audio|video)\s+)?call\s+from|"
-    r"(?:(?:audio|video)\s+)?call\s+from)\s+",
-    re.IGNORECASE,
-)
-CALLER_SUFFIX_PATTERN = re.compile(r"\s+(?:is\s+calling(?:\s+you)?|calling\s+you)[.!]?\s*$", re.IGNORECASE)
-GENERIC_CALL_TEXT = {
+TEAMS_FOR_LINUX_NAMES = {"microsoft teams for linux", "teams for linux"}
+GENERIC_CALLER_LABELS = {
     "incoming call",
     "incoming audio call",
     "incoming video call",
-    "audio call",
-    "video call",
-    "microsoft teams",
-    "teams",
 }
 
 
@@ -53,49 +37,85 @@ def clean_text(value):
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", value or ""))).strip()
 
 
-def caller_from_notification(summary, body, phonebook):
+def full_phone_number(value):
+    value = clean_text(value)
+    if not PHONE_PATTERN.fullmatch(value):
+        return None
+    normalized = normalize_number(value)
+    return normalized if 7 <= len(normalized) <= 15 else None
+
+
+def caller_from_notification_fields(summary, body, phonebook):
     summary = clean_text(summary)
     body = clean_text(body)
-    combined_text = f"{summary} {body}"
+    for value in (summary, body):
+        number = full_phone_number(value)
+        if number:
+            return phonebook.get(number, value)
 
-    for match in PHONE_PATTERN.finditer(combined_text):
-        number = match.group().strip()
-        normalized = normalize_number(number)
-        if 7 <= len(normalized) <= 15:
-            return phonebook.get(normalized, number)
-
-    for text in (body, summary):
-        caller_match = CALLER_PREFIX_PATTERN.match(text)
-        if caller_match:
-            text = text[caller_match.end():]
-        text = CALLER_SUFFIX_PATTERN.sub("", text).strip(" .,:;-–—")
-        if text and text.casefold() not in GENERIC_CALL_TEXT:
-            return text
-
+    for value in (summary, body):
+        if value and value.casefold() not in GENERIC_CALLER_LABELS:
+            return value
     return "Caller ID unavailable"
+
+
+def incoming_call_caller(caller, text, phonebook):
+    caller = clean_text(caller)
+    text = clean_text(text)
+
+    for candidate in (caller, text):
+        for match in PHONE_PATTERN.finditer(candidate):
+            number = match.group().strip()
+            normalized = normalize_number(number)
+            if not 7 <= len(normalized) <= 15:
+                continue
+            known_name = phonebook.get(normalized)
+            if known_name:
+                return known_name
+            if candidate == caller and text and normalize_number(text) != normalized:
+                return text
+            return number
+
+    if caller:
+        return caller
+    if text:
+        return text
+    return "Caller ID unavailable"
+
+
+def log_call_message(message):
+    print(message, flush=True)
+    default_log_path = Path.home() / ".local" / "state" / "callerid" / "teams-calls.log"
+    log_path = Path(os.environ.get("CALL_MONITOR_LOG", default_log_path))
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(
+            log_path,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o600,
+        )
+        with os.fdopen(descriptor, "a", encoding="utf-8") as log_file:
+            timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+            log_file.write(f"{timestamp} {message}\n")
+    except OSError as error:
+        LOGGER.error("Could not write call log %s: %s", log_path, error)
 
 
 def parse_call_notification(arguments, phonebook):
     if len(arguments) < 8:
         return None
 
-    app_name, replaces_id, _icon, summary, body, actions = arguments[:6]
-    summary = clean_text(summary)
-    body = clean_text(body)
-    has_call_text = bool(CALL_TEXT_PATTERN.search(f"{summary} {body}"))
-
-    action_labels = [str(action).casefold() for action in actions]
-    has_answer_action = any(
-        re.search(r"\b(?:accept|answer)\b", action) for action in action_labels
-    )
-    has_decline_action = any(
-        re.search(r"\b(?:decline|reject|ignore)\b", action)
-        for action in action_labels
-    )
-    if not has_call_text and not (has_answer_action and has_decline_action):
+    app_name, replaces_id, _icon, summary, body = arguments[:5]
+    app_name_text = clean_text(app_name).casefold()
+    if app_name_text not in TEAMS_FOR_LINUX_NAMES:
         return None
 
-    caller = caller_from_notification(summary, body, phonebook)
+    title_number = full_phone_number(summary)
+    body_number = full_phone_number(body)
+    if title_number is None or title_number != body_number:
+        return None
+
+    caller = phonebook.get(title_number, clean_text(summary))
     return {
         "app_name": str(app_name),
         "replaces_id": int(replaces_id),
@@ -124,7 +144,6 @@ def parse_portal_call_notification(notification, phonebook):
             for key in ("label", "purpose", "action")
         )
 
-    has_call_text = bool(CALL_TEXT_PATTERN.search(f"{summary} {body}"))
     has_incoming_category = notification.get("category") == "call.incoming"
     labels = [label.casefold() for label in button_labels]
     has_answer_action = any(
@@ -135,14 +154,19 @@ def parse_portal_call_notification(notification, phonebook):
         re.search(r"\b(?:decline|reject|ignore|call\.decline)\b", label)
         for label in labels
     )
-    if not (
-        has_call_text
-        or has_incoming_category
-        or (has_answer_action and has_decline_action)
-    ):
+    title_number = full_phone_number(summary)
+    body_number = full_phone_number(body)
+    has_repeated_caller_number = (
+        title_number is not None and title_number == body_number
+    )
+    if not (has_incoming_category or has_repeated_caller_number or (has_answer_action and has_decline_action)):
         return None
 
-    return caller_from_notification(summary, body, phonebook)
+    return caller_from_notification_fields(summary, body, phonebook)
+
+
+def debug_notifications_enabled():
+    return os.environ.get("CALL_MONITOR_DEBUG_NOTIFICATIONS") == "1"
 
 
 class NotificationCallTracker:
@@ -169,33 +193,49 @@ class NotificationCallTracker:
         return [f"Incoming call stopped ringing from {caller}"]
 
     def handle_message(self, message):
+        from dbus_next import MessageType
+
         if (
             message.message_type == MessageType.METHOD_CALL
-            and message.destination == NOTIFICATIONS_INTERFACE
             and message.interface == NOTIFICATIONS_INTERFACE
             and message.member == "Notify"
         ):
             notification = parse_call_notification(message.body, self.phonebook)
+            if debug_notifications_enabled():
+                app_name = message.body[0] if len(message.body) > 0 else ""
+                summary = message.body[3] if len(message.body) > 3 else ""
+                body = message.body[4] if len(message.body) > 4 else ""
+                print(
+                    "D-Bus Notify observed: "
+                    f"app={app_name!r} title={clean_text(summary)!r} "
+                    f"body={clean_text(body)!r} "
+                    f"call_match={notification is not None}",
+                    flush=True,
+                )
             if notification:
                 self.pending_notifications[(message.sender, message.serial)] = notification
             return []
 
         if (
             message.message_type == MessageType.METHOD_CALL
-            and message.destination == "org.freedesktop.portal.Desktop"
             and message.interface == PORTAL_INTERFACE
             and message.member == "AddNotification"
             and len(message.body) >= 2
         ):
             notification_id = str(message.body[0])
             caller = parse_portal_call_notification(message.body[1], self.phonebook)
+            if debug_notifications_enabled():
+                print(
+                    "XDG portal notification observed: "
+                    f"id={notification_id!r} call_match={caller is not None}",
+                    flush=True,
+                )
             if caller:
                 return self.start_notification(("portal", notification_id), caller)
             return []
 
         if (
             message.message_type == MessageType.METHOD_CALL
-            and message.destination == "org.freedesktop.portal.Desktop"
             and message.interface == PORTAL_INTERFACE
             and message.member == "RemoveNotification"
             and message.body
@@ -243,41 +283,95 @@ class NotificationCallTracker:
         return []
 
 
-async def run_monitor(phonebook):
-    bus = await MessageBus().connect()
-    tracker = NotificationCallTracker(phonebook)
+def handle_monitor_message(message, tracker):
+    from dbus_next import MessageType
 
-    def handle_message(message):
+    try:
         for output in tracker.handle_message(message):
             print(output, flush=True)
-        return False
+    except Exception:
+        LOGGER.exception("Failed to process a monitored D-Bus message")
 
-    bus.add_message_handler(handle_message)
-    reply = await bus.call(
-        Message(
-            destination="org.freedesktop.DBus",
-            path="/org/freedesktop/DBus",
-            interface="org.freedesktop.DBus.Monitoring",
-            member="BecomeMonitor",
-            signature="asu",
-            body=[MONITOR_RULES, 0],
+    # A monitor connection cannot reply to observed method calls. Returning
+    # True consumes those messages; method returns must pass through so
+    # MessageBus.call() can complete the BecomeMonitor handshake.
+    return message.message_type == MessageType.METHOD_CALL
+
+
+async def run_monitor(phonebook):
+    from dbus_next import Message, MessageType
+    from dbus_next.aio import MessageBus
+
+    print("Connecting to the session D-Bus...", flush=True)
+    bus = await MessageBus().connect()
+    print("Connected to the session D-Bus.", flush=True)
+    tracker = NotificationCallTracker(phonebook)
+    bus.add_message_handler(lambda message: handle_monitor_message(message, tracker))
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+    loop.add_signal_handler(signal.SIGINT, stop_event.set)
+    loop.add_signal_handler(signal.SIGTERM, stop_event.set)
+    try:
+        reply = await bus.call(
+            Message(
+                destination="org.freedesktop.DBus",
+                path="/org/freedesktop/DBus",
+                interface="org.freedesktop.DBus.Monitoring",
+                member="BecomeMonitor",
+                signature="asu",
+                body=[MONITOR_RULES, 0],
+            )
         )
-    )
-    if reply.message_type == MessageType.ERROR:
+        if reply.message_type == MessageType.ERROR:
+            raise RuntimeError(
+                "The session D-Bus rejected BecomeMonitor; this desktop bus may not "
+                "allow notification monitoring."
+            )
+
+        print(
+            "Session D-Bus monitor active; waiting for desktop notifications.",
+            flush=True,
+        )
+        await stop_event.wait()
+        LOGGER.info("Stopping NixOS Teams call monitor")
+    finally:
+        loop.remove_signal_handler(signal.SIGINT)
+        loop.remove_signal_handler(signal.SIGTERM)
         bus.disconnect()
-        raise RuntimeError(
-            "The session D-Bus rejected BecomeMonitor; this desktop bus may not "
-            "allow notification monitoring."
-        )
+        try:
+            await bus.wait_for_disconnect()
+        except EOFError:
+            LOGGER.debug("Session D-Bus connection closed")
 
-    LOGGER.info("Monitoring session-bus desktop notifications for incoming calls")
-    await asyncio.Future()
+
+def run_incoming_call_command(arguments, phonebook):
+    caller = arguments[0] if arguments else ""
+    text = arguments[1] if len(arguments) > 1 else ""
+    display_name = incoming_call_caller(caller, text, phonebook)
+    log_call_message(f"Incoming call from {display_name}")
+
+    def report_call_ended(_signum, _frame):
+        log_call_message(f"Incoming call stopped ringing from {display_name}")
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, report_call_ended)
+    try:
+        while True:
+            signal.pause()
+    except KeyboardInterrupt:
+        LOGGER.info("Stopping incoming-call command")
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    phonebook_path = os.environ.get("PHONEBOOK_PATH", "phonebook.csv")
+    phonebook_path = os.environ.get(
+        "PHONEBOOK_PATH", str(Path(__file__).with_name("phonebook.csv"))
+    )
     phonebook = load_phonebook(phonebook_path)
+    if len(sys.argv) > 1 and sys.argv[1] == "--incoming-call":
+        run_incoming_call_command(sys.argv[2:], phonebook)
+        return
+
     try:
         asyncio.run(run_monitor(phonebook))
     except KeyboardInterrupt:
