@@ -1,14 +1,16 @@
-# Teams Incoming Call Monitor
+# Clio - Teams Incoming Call Monitor
 
 This Python daemon receives authenticated incoming-call callbacks for a
 Microsoft Teams calling bot and prints the caller's phone number. If the number
 matches `phonebook.csv`, it prints the caller's name instead.
 
-This is not a subscription to calls ringing a person's existing Teams client.
-Microsoft exposes incoming-call notifications to a registered calling bot
-when a call is addressed to that bot. A Teams administrator must configure the
-bot, enable calling, and publish the callback as a publicly reachable HTTPS
-URL. This monitor does not answer, reject, or otherwise control calls.
+Clio currently has three versions, with each one being tailored to different use cases:
+
+| Version   | Current status |
+|-----------|----------------|
+| Windows   | Tested, works  |
+| NixOS     | Tested, works  |
+| Teams Bot | Untested       |
 
 ## Local desktop fallback
 
@@ -115,7 +117,7 @@ phone,name
 +442079460123,Sam Taylor
 ```
 
-## Run
+## Teams Bot
 
 Use Python 3.9 or later. From this directory:
 
@@ -145,12 +147,6 @@ The callback bearer token is checked against Microsoft's published signing
 keys, issuer, expiration, and the configured app ID audience before its JSON
 body is processed. The callback responds with HTTP 204, as required by the
 calling notification protocol.
-
-## Test
-
-```powershell
-python -m unittest -v
-```
 
 Microsoft setup references:
 
