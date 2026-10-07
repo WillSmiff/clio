@@ -12,16 +12,12 @@ Clio currently has three versions, with each one being tailored to different use
 | NixOS     | Tested, works  |
 | Teams Bot | Untested       |
 
-## Local desktop fallback
-
-If you cannot install a custom Teams app, try `teams_desktop_monitor.py` on the
-Windows computer where you are signed in to the Teams desktop client:
-
+## Windows
 ```powershell
 python teams_desktop_monitor.py
 ```
 
-This uses Windows UI Automation to inspect accessible text in Teams windows;
+The initial version of Clio. This uses Windows UI Automation to inspect accessible text in Teams windows;
 it needs no Teams app registration, public URL, or callback credentials. Keep
 Teams running and signed in. The UI can change between Teams versions, and
 caller details might not be exposed to UI Automation, so this is an
@@ -106,18 +102,14 @@ tail -f ~/.local/state/callerid/teams-calls.log
 Set `CALL_MONITOR_LOG` to choose another log path. Caller names and numbers are
 personal data; keep the log private and remove it when no longer needed.
 
-## Phonebook
-
-Edit `phonebook.csv` and keep its header as `phone,name`. Use E.164 numbers,
-including the country code, to avoid ambiguous local-number matches:
-
-```csv
-phone,name
-+12065550100,Avery Chen
-+442079460123,Sam Taylor
-```
 
 ## Teams Bot
+An implementation of Clio for use as a registered Microsoft Teams calling bot.
+Microsoft exposes incoming-call notifications to the bot when a call is addressed it. 
+
+In order for Clio to work in this form, a Teams administrator must configure the
+bot, enable calling, and publish the callback as a publicly reachable HTTPS
+URL. This monitor does not answer, reject, or otherwise control calls.
 
 Use Python 3.9 or later. From this directory:
 
@@ -147,6 +139,17 @@ The callback bearer token is checked against Microsoft's published signing
 keys, issuer, expiration, and the configured app ID audience before its JSON
 body is processed. The callback responds with HTTP 204, as required by the
 calling notification protocol.
+
+## Phonebook
+
+Edit `phonebook.csv` and keep its header as `phone,name`. Use E.164 numbers,
+including the country code, to avoid ambiguous local-number matches:
+
+```csv
+phone,name
++12065550100,Avery Chen
++442079460123,Sam Taylor
+```
 
 Microsoft setup references:
 
