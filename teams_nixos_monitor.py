@@ -15,15 +15,12 @@ LOGGER = logging.getLogger("teams-nixos-monitor")
 NOTIFICATIONS_INTERFACE = "org.freedesktop.Notifications"
 PORTAL_INTERFACE = "org.freedesktop.portal.Notification"
 MONITOR_RULES = [
-    "type='method_call',destination='org.freedesktop.Notifications',"
-    "interface='org.freedesktop.Notifications',member='Notify'",
-    "type='method_return',sender='org.freedesktop.Notifications'",
+    "type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
+    "type='method_return'",
     "type='signal',interface='org.freedesktop.Notifications',"
     "member='NotificationClosed'",
-    "type='method_call',destination='org.freedesktop.portal.Desktop',"
-    "interface='org.freedesktop.portal.Notification',member='AddNotification'",
-    "type='method_call',destination='org.freedesktop.portal.Desktop',"
-    "interface='org.freedesktop.portal.Notification',member='RemoveNotification'",
+    "type='method_call',interface='org.freedesktop.portal.Notification',member='AddNotification'",
+    "type='method_call',interface='org.freedesktop.portal.Notification',member='RemoveNotification'",
     "type='signal',interface='org.freedesktop.portal.Notification',"
     "member='ActionInvoked'",
 ]
@@ -241,7 +238,6 @@ class NotificationCallTracker:
 
         if (
             message.message_type == MessageType.METHOD_CALL
-            and message.destination == NOTIFICATIONS_INTERFACE
             and message.interface == NOTIFICATIONS_INTERFACE
             and message.member == "Notify"
         ):
@@ -263,7 +259,6 @@ class NotificationCallTracker:
 
         if (
             message.message_type == MessageType.METHOD_CALL
-            and message.destination == "org.freedesktop.portal.Desktop"
             and message.interface == PORTAL_INTERFACE
             and message.member == "AddNotification"
             and len(message.body) >= 2
@@ -282,7 +277,6 @@ class NotificationCallTracker:
 
         if (
             message.message_type == MessageType.METHOD_CALL
-            and message.destination == "org.freedesktop.portal.Desktop"
             and message.interface == PORTAL_INTERFACE
             and message.member == "RemoveNotification"
             and message.body
