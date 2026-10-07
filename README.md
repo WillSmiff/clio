@@ -1,4 +1,7 @@
 # Clio - Teams Incoming Call Monitor
+<p align="center">
+  <img src="https://cdn.amv.nl/cms/images/Renault_Clio_1990_1998_vooraanzicht_a47e2279c3.jpeg" width=50% alt="a beautiful clio"/>
+</p>
 
 This Python daemon receives authenticated incoming-call callbacks for a
 Microsoft Teams calling bot and prints the caller's phone number. If the number
@@ -147,7 +150,7 @@ including the country code, to avoid ambiguous local-number matches:
 
 ```csv
 phone,name
-+12065550100,Avery Chen
++31612345678,John Doe
 +442079460123,Sam Taylor
 ```
 
