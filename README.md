@@ -39,12 +39,12 @@ reliably distinguish pickup from caller cancellation or timeout.
 On NixOS, use `teams_nixos_monitor.py` instead of the Windows UI monitor. It
 listens on the logged-in user's session D-Bus for desktop notification
 requests through either `org.freedesktop.Notifications` or the XDG Desktop
-Portal, filters for incoming-call text/categories/actions, and tracks
-notification closure or removal. For Teams for Linux, it also recognizes the
-call notification format where the app name is `Microsoft Teams for Linux` and
-the title and message contain the same phone number with different spacing. It
-does not use `journalctl`, Teams app permissions, a public URL, or bot
-credentials.
+Portal. For Teams for Linux's standard notification, it requires the app name
+`Microsoft Teams for Linux` and matching phone numbers in the title and message,
+allowing different spacing. Portal notifications use their incoming-call
+category or accept/decline action metadata. It tracks notification closure or
+removal. It does not use `journalctl`, Teams app permissions, a public URL, or
+bot credentials.
 
 Run it from the graphical login session so it can access that session's D-Bus:
 

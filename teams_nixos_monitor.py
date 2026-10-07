@@ -24,26 +24,12 @@ MONITOR_RULES = [
     "type='signal',interface='org.freedesktop.portal.Notification',"
     "member='ActionInvoked'",
 ]
-CALL_TEXT_PATTERN = re.compile(
-    r"\b(?:incoming\s+(?:(?:audio|video)\s+)?call|"
-    r"(?:(?:audio|video)\s+)?call\s+from|is\s+calling|calling\s+you)\b",
-    re.IGNORECASE,
-)
 PHONE_PATTERN = re.compile(r"(?<!\w)(?:\+|00)\s*\d[\d\s().-]{4,}\d(?!\w)")
-CALLER_PREFIX_PATTERN = re.compile(
-    r"^\s*(?:incoming\s+(?:(?:audio|video)\s+)?call\s+from|"
-    r"(?:(?:audio|video)\s+)?call\s+from)\s+",
-    re.IGNORECASE,
-)
-CALLER_SUFFIX_PATTERN = re.compile(r"\s+(?:is\s+calling(?:\s+you)?|calling\s+you)[.!]?\s*$", re.IGNORECASE)
-GENERIC_CALL_TEXT = {
+TEAMS_FOR_LINUX_NAMES = {"microsoft teams for linux", "teams for linux"}
+GENERIC_CALLER_LABELS = {
     "incoming call",
     "incoming audio call",
     "incoming video call",
-    "audio call",
-    "video call",
-    "microsoft teams",
-    "teams",
 }
 
 
@@ -59,25 +45,17 @@ def full_phone_number(value):
     return normalized if 7 <= len(normalized) <= 15 else None
 
 
-def caller_from_notification(summary, body, phonebook):
+def caller_from_notification_fields(summary, body, phonebook):
     summary = clean_text(summary)
     body = clean_text(body)
-    combined_text = f"{summary} {body}"
+    for value in (summary, body):
+        number = full_phone_number(value)
+        if number:
+            return phonebook.get(number, value)
 
-    for match in PHONE_PATTERN.finditer(combined_text):
-        number = match.group().strip()
-        normalized = normalize_number(number)
-        if 7 <= len(normalized) <= 15:
-            return phonebook.get(normalized, number)
-
-    for text in (body, summary):
-        caller_match = CALLER_PREFIX_PATTERN.match(text)
-        if caller_match:
-            text = text[caller_match.end():]
-        text = CALLER_SUFFIX_PATTERN.sub("", text).strip(" .,:;-–—")
-        if text and text.casefold() not in GENERIC_CALL_TEXT:
-            return text
-
+    for value in (summary, body):
+        if value and value.casefold() not in GENERIC_CALLER_LABELS:
+            return value
     return "Caller ID unavailable"
 
 
@@ -127,36 +105,17 @@ def parse_call_notification(arguments, phonebook):
     if len(arguments) < 8:
         return None
 
-    app_name, replaces_id, _icon, summary, body, actions = arguments[:6]
-    summary = clean_text(summary)
-    body = clean_text(body)
-    has_call_text = bool(CALL_TEXT_PATTERN.search(f"{summary} {body}"))
+    app_name, replaces_id, _icon, summary, body = arguments[:5]
     app_name_text = clean_text(app_name).casefold()
-    title_number = full_phone_number(summary)
-    body_number = full_phone_number(body)
-    has_repeated_caller_number = (
-        "teams" in app_name_text
-        and "linux" in app_name_text
-        and title_number is not None
-        and title_number == body_number
-    )
-
-    action_labels = [str(action).casefold() for action in actions]
-    has_answer_action = any(
-        re.search(r"\b(?:accept|answer)\b", action) for action in action_labels
-    )
-    has_decline_action = any(
-        re.search(r"\b(?:decline|reject|ignore)\b", action)
-        for action in action_labels
-    )
-    if not (
-        has_call_text
-        or (has_answer_action and has_decline_action)
-        or has_repeated_caller_number
-    ):
+    if app_name_text not in TEAMS_FOR_LINUX_NAMES:
         return None
 
-    caller = caller_from_notification(summary, body, phonebook)
+    title_number = full_phone_number(summary)
+    body_number = full_phone_number(body)
+    if title_number is None or title_number != body_number:
+        return None
+
+    caller = phonebook.get(title_number, clean_text(summary))
     return {
         "app_name": str(app_name),
         "replaces_id": int(replaces_id),
@@ -185,7 +144,6 @@ def parse_portal_call_notification(notification, phonebook):
             for key in ("label", "purpose", "action")
         )
 
-    has_call_text = bool(CALL_TEXT_PATTERN.search(f"{summary} {body}"))
     has_incoming_category = notification.get("category") == "call.incoming"
     labels = [label.casefold() for label in button_labels]
     has_answer_action = any(
@@ -196,14 +154,15 @@ def parse_portal_call_notification(notification, phonebook):
         re.search(r"\b(?:decline|reject|ignore|call\.decline)\b", label)
         for label in labels
     )
-    if not (
-        has_call_text
-        or has_incoming_category
-        or (has_answer_action and has_decline_action)
-    ):
+    title_number = full_phone_number(summary)
+    body_number = full_phone_number(body)
+    has_repeated_caller_number = (
+        title_number is not None and title_number == body_number
+    )
+    if not (has_incoming_category or has_repeated_caller_number or (has_answer_action and has_decline_action)):
         return None
 
-    return caller_from_notification(summary, body, phonebook)
+    return caller_from_notification_fields(summary, body, phonebook)
 
 
 def debug_notifications_enabled():
