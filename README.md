@@ -12,6 +12,11 @@ Clio currently has three versions, with each one being tailored to different use
 | NixOS     | Tested, works  |
 | Teams Bot | Untested       |
 
+The NixOS version can also report each call to an
+[Aurora](https://github.com/GEWIS/aurora) info screen, which shows the caller
+full-screen while the phone rings and gives the screen back afterwards. See
+[Showing the caller on an Aurora info screen](#showing-the-caller-on-an-aurora-info-screen).
+
 ## Windows
 ```powershell
 python teams_desktop_monitor.py
@@ -86,10 +91,11 @@ paths with the actual interpreter and script locations:
 Teams for Linux appends the caller and text as arguments. The script prints the
 incoming event, then prints the stopped-ringing event when Teams terminates
 the child process. It prefers a phonebook match, then the caller name supplied
-by Teams, then the number. This mode needs only Python's standard library;
-`dbus-next` is required only for the notification-bus mode above. Use a
-Teams for Linux version that includes its incoming PSTN/call-queue detection
-fix (v2.24.0 or newer).
+by Teams, then the number. Teams' own generic labels ("Incoming call",
+"Incoming audio call", "Incoming video call") are never treated as a caller
+name. This mode needs only Python's standard library; `dbus-next` is required
+only for the notification-bus mode above. Use a Teams for Linux version that
+includes its incoming PSTN/call-queue detection fix (v2.24.0 or newer).
 
 Teams for Linux captures child stdout/stderr, so command-mode events are also
 appended to `~/.local/state/callerid/teams-calls.log` with private file
@@ -102,6 +108,91 @@ tail -f ~/.local/state/callerid/teams-calls.log
 Set `CALL_MONITOR_LOG` to choose another log path. Caller names and numbers are
 personal data; keep the log private and remove it when no longer needed.
 
+## Showing the caller on an Aurora info screen
+
+Clio can report each call to [Aurora](https://github.com/GEWIS/aurora), which
+shows the caller full-screen on the narrowcasting screens and takes the screen
+back when the call is answered, declined or cancelled. Clio sends the number;
+Aurora resolves it against its own caller directory to pick the name and photo,
+so a caller only has to be named once, in the backoffice.
+
+This works in both NixOS modes (the command hook and the notification watcher), and needs only the standard library.
+
+### Aurora side
+
+Aurora's caller ID is off by default. In the backoffice:
+
+1. Turn on `InfoScreen.CallerId` under **Server settings**.
+2. Add the callers you want shown by name under **Info screen → Caller ID**.
+   Use E.164 numbers, as in `phonebook.csv`.
+3. Add the overlay to each screen under **Manage layout → Overlays → Incoming
+   call (overlay)**.
+4. Create an integration user with the `setInfoCallerRing` and
+   `setInfoCallerEnd` scopes, and copy its API key.
+
+The **Test call** and **Hang up** buttons next to the directory drive the
+overlay without a real call, which is the quickest way to confirm the screen
+side before involving Teams.
+
+### Clio side
+
+Two environment variables, read at startup:
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `AURORA_URL` | yes | Aurora core's base URL, e.g. `https://aurora.gewis.nl` |
+| `AURORA_API_KEY` | | The integration key, inline |
+| `AURORA_API_KEY_FILE` | | Path to a file holding the key; preferred over the above |
+| `AURORA_TIMEOUT_SECONDS` | | Request timeout, default `2.0` |
+
+With neither the URL nor a key set, reporting is simply off and Clio behaves
+exactly as before. Setting one but not the other logs a warning, so a typo does
+not look like a silently dark screen.
+
+Prefer `AURORA_API_KEY_FILE` on NixOS: anything in a Nix store path is
+world-readable, so keep the key in a file managed by
+[agenix](https://github.com/ryantm/agenix) or
+[sops-nix](https://github.com/Mic92/sops-nix) and point at it by path. Clio
+warns if the file is group- or world-readable; `chmod 600` it.
+
+Because Teams for Linux may be launched from a desktop entry rather than a
+shell, set these where Teams itself will see them rather than in `~/.bashrc`.
+A home-manager fragment:
+
+```nix
+{
+  # Both modes read these; the command hook inherits Teams' own environment.
+  home.sessionVariables = {
+    AURORA_URL = "https://aurora.gewis.nl";
+    AURORA_API_KEY_FILE = "/run/user/1000/secrets/aurora-caller-key";
+  };
+}
+```
+
+Check it reaches the process with `tr '\0' '\n' < /proc/$(pgrep -f teams-for-linux | head -1)/environ | grep AURORA`.
+
+### Behaviour and limits
+
+- Reporting is best-effort. An unreachable or misconfigured Aurora is logged as
+  a warning and never stops Clio from handling or logging the call.
+- The overlay times out on Aurora's side after about 20 seconds, so a lost
+  hang-up costs a few seconds of a stale name rather than a stuck screen.
+- A hang-up is only reported for a call Clio actually announced, so a second
+  call that is still ringing keeps its overlay.
+- Clio cannot tell a pickup from a decline or a timeout, and does not need to:
+  all three dismiss the overlay.
+- A call with no number and no usable name is not reported at all, since there
+  would be nothing to show.
+- Warnings name the likely cause: a 409 means `InfoScreen.CallerId` is off, and
+  a 401/403 means the key or its scopes are wrong.
+
+### Tests
+
+The Aurora path is covered by standard-library tests:
+
+```sh
+python3 -m unittest discover
+```
 
 ## Teams Bot
 An implementation of Clio for use as a registered Microsoft Teams calling bot.

@@ -5,9 +5,11 @@ import os
 import re
 import signal
 import sys
+from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
 
+from aurora_client import AuroraClient, to_e164
 from phonebook import load_phonebook, normalize_number
 
 
@@ -31,6 +33,16 @@ GENERIC_CALLER_LABELS = {
     "incoming audio call",
     "incoming video call",
 }
+CALLER_ID_UNAVAILABLE = "Caller ID unavailable"
+#: Strings that report a ringing phone without identifying anybody.
+NON_NAMES = GENERIC_CALLER_LABELS | {CALLER_ID_UNAVAILABLE.casefold()}
+
+#: A caller as Clio understands them: `display` is what gets printed and logged
+#: (a phonebook name where there is one), `number` is the E.164 number Aurora
+#: resolves against its own directory, or None when the call carried no number.
+#: Both are needed because the two consumers want different things, and the
+#: printed output must not change.
+Caller = namedtuple("Caller", ("display", "number"))
 
 
 def clean_text(value):
@@ -51,15 +63,33 @@ def caller_from_notification_fields(summary, body, phonebook):
     for value in (summary, body):
         number = full_phone_number(value)
         if number:
-            return phonebook.get(number, value)
+            return Caller(phonebook.get(number, value), to_e164(number))
 
     for value in (summary, body):
-        if value and value.casefold() not in GENERIC_CALLER_LABELS:
-            return value
-    return "Caller ID unavailable"
+        if meaningful_name(value):
+            return Caller(value, None)
+    return Caller(CALLER_ID_UNAVAILABLE, None)
 
 
-def incoming_call_caller(caller, text, phonebook):
+def meaningful_name(value):
+    """
+    Whether a string actually names somebody, rather than being empty, one of
+    Teams' generic "Incoming call" labels, or Clio's own "unavailable" sentinel.
+    Those say only that the phone is ringing, which the overlay conveys by
+    itself, so none of them should be shown as though it were a caller.
+    """
+    value = (value or "").strip()
+    return bool(value) and value.casefold() not in NON_NAMES
+
+
+def incoming_call_identity(caller, text, phonebook):
+    """
+    Resolve the caller and text Teams for Linux passes to the command hook.
+
+    Returns both the display name and the number, so the log keeps reading the
+    way it always has while Aurora still receives something it can match
+    against its directory.
+    """
     caller = clean_text(caller)
     text = clean_text(text)
 
@@ -69,18 +99,40 @@ def incoming_call_caller(caller, text, phonebook):
             normalized = normalize_number(number)
             if not 7 <= len(normalized) <= 15:
                 continue
+            e164 = to_e164(number)
             known_name = phonebook.get(normalized)
             if known_name:
-                return known_name
-            if candidate == caller and text and normalize_number(text) != normalized:
-                return text
-            return number
+                return Caller(known_name, e164)
+            # Teams puts a richer caller string in `text` for some calls, which
+            # beats showing a bare number -- but only when it names somebody.
+            if (
+                candidate == caller
+                and meaningful_name(text)
+                and normalize_number(text) != normalized
+            ):
+                return Caller(text, e164)
+            return Caller(number, e164)
 
-    if caller:
-        return caller
-    if text:
-        return text
-    return "Caller ID unavailable"
+    # No number anywhere: a Teams-to-Teams call, which carries only a name.
+    if meaningful_name(caller):
+        return Caller(caller, None)
+    if meaningful_name(text):
+        return Caller(text, None)
+    return Caller(CALLER_ID_UNAVAILABLE, None)
+
+
+def incoming_call_caller(caller, text, phonebook):
+    """The display name alone, kept for callers that do not need the number."""
+    return incoming_call_identity(caller, text, phonebook).display
+
+
+def reportable_name(caller):
+    """
+    The display name to hand Aurora, which is nothing when Clio could not work
+    out who is calling: a status like "Caller ID unavailable" does not belong on
+    a wall-mounted screen as if it were the caller's name.
+    """
+    return caller.display if meaningful_name(caller.display) else None
 
 
 def log_call_message(message):
@@ -115,7 +167,10 @@ def parse_call_notification(arguments, phonebook):
     if title_number is None or title_number != body_number:
         return None
 
-    caller = phonebook.get(title_number, clean_text(summary))
+    caller = Caller(
+        phonebook.get(title_number, clean_text(summary)),
+        to_e164(title_number),
+    )
     return {
         "app_name": str(app_name),
         "replaces_id": int(replaces_id),
@@ -170,8 +225,9 @@ def debug_notifications_enabled():
 
 
 class NotificationCallTracker:
-    def __init__(self, phonebook):
+    def __init__(self, phonebook, aurora=None):
         self.phonebook = phonebook
+        self.aurora = aurora
         self.pending_notifications = {}
         self.active_notifications = {}
 
@@ -179,8 +235,12 @@ class NotificationCallTracker:
         already_active = caller in self.active_notifications.values()
         self.active_notifications[key] = caller
         if already_active:
+            # Teams replaces its own notification while a call rings on; the
+            # screen is already showing this caller.
             return []
-        return [f"Incoming call from {caller}"]
+        if self.aurora:
+            self.aurora.ring(caller.number, reportable_name(caller))
+        return [f"Incoming call from {caller.display}"]
 
     def stop_notification(self, key):
         caller = self.active_notifications.pop(key, None)
@@ -190,7 +250,11 @@ class NotificationCallTracker:
         for active_key, active_caller in list(self.active_notifications.items()):
             if active_caller == caller:
                 self.active_notifications.pop(active_key)
-        return [f"Incoming call stopped ringing from {caller}"]
+        # Only dismiss once nothing is ringing any more, so hanging up one call
+        # does not clear the overlay of another that is still coming in.
+        if self.aurora and not self.active_notifications:
+            self.aurora.end()
+        return [f"Incoming call stopped ringing from {caller.display}"]
 
     def handle_message(self, message):
         from dbus_next import MessageType
@@ -298,14 +362,14 @@ def handle_monitor_message(message, tracker):
     return message.message_type == MessageType.METHOD_CALL
 
 
-async def run_monitor(phonebook):
+async def run_monitor(phonebook, aurora=None):
     from dbus_next import Message, MessageType
     from dbus_next.aio import MessageBus
 
     print("Connecting to the session D-Bus...", flush=True)
     bus = await MessageBus().connect()
     print("Connected to the session D-Bus.", flush=True)
-    tracker = NotificationCallTracker(phonebook)
+    tracker = NotificationCallTracker(phonebook, aurora)
     bus.add_message_handler(lambda message: handle_monitor_message(message, tracker))
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
@@ -344,17 +408,29 @@ async def run_monitor(phonebook):
             LOGGER.debug("Session D-Bus connection closed")
 
 
-def run_incoming_call_command(arguments, phonebook):
+def run_incoming_call_command(arguments, phonebook, aurora=None):
     caller = arguments[0] if arguments else ""
     text = arguments[1] if len(arguments) > 1 else ""
-    display_name = incoming_call_caller(caller, text, phonebook)
-    log_call_message(f"Incoming call from {display_name}")
+    identity = incoming_call_identity(caller, text, phonebook)
+    log_call_message(f"Incoming call from {identity.display}")
+
+    # Teams runs one of these per call, so this process never sees the others.
+    # Dismissing an overlay this call never raised would clear the overlay of a
+    # second call that is still ringing, hence the flag.
+    reported = False
 
     def report_call_ended(_signum, _frame):
-        log_call_message(f"Incoming call stopped ringing from {display_name}")
+        log_call_message(f"Incoming call stopped ringing from {identity.display}")
+        if aurora and reported:
+            aurora.end()
         raise SystemExit(0)
 
+    # Installed before the call is reported, so a call answered while Aurora is
+    # still being told about it is not missed.
     signal.signal(signal.SIGTERM, report_call_ended)
+    if aurora:
+        reported = aurora.ring(identity.number, reportable_name(identity))
+
     try:
         while True:
             signal.pause()
@@ -368,12 +444,16 @@ def main():
         "PHONEBOOK_PATH", str(Path(__file__).with_name("phonebook.csv"))
     )
     phonebook = load_phonebook(phonebook_path)
+    aurora = AuroraClient.from_env()
+    if aurora:
+        LOGGER.info("Reporting incoming calls to Aurora at %s", aurora.base_url)
+
     if len(sys.argv) > 1 and sys.argv[1] == "--incoming-call":
-        run_incoming_call_command(sys.argv[2:], phonebook)
+        run_incoming_call_command(sys.argv[2:], phonebook, aurora)
         return
 
     try:
-        asyncio.run(run_monitor(phonebook))
+        asyncio.run(run_monitor(phonebook, aurora))
     except KeyboardInterrupt:
         LOGGER.info("Stopping NixOS Teams call monitor")
     except Exception as error:
