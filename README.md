@@ -123,12 +123,12 @@ This works in both NixOS modes (the command hook and the notification watcher), 
 Aurora's caller ID is off by default. In the backoffice:
 
 1. Turn on `InfoScreen.CallerId` under **Server settings**.
-2. Add the callers you want shown by name under **Info screen → Caller ID**.
+2. Choose how a number missing from the directory is shown with
+   `InfoScreen.CallerId.UnknownNumber`.
+3. Add the callers you want shown by name under **Info screen → Caller ID**.
    Use E.164 numbers, as in `phonebook.csv`.
-3. Add the overlay to each screen under **Manage layout → Overlays → Incoming
-   call (overlay)**.
-4. Create an integration user with the `setInfoCallerRing` and
-   `setInfoCallerEnd` scopes, and copy its API key.
+4. Under **Integrations**, create an integration user with the
+   `setInfoCallerRing` and `setInfoCallerEnd` scopes, and copy its API key.
 
 The **Test call** and **Hang up** buttons next to the directory drive the
 overlay without a real call, which is the quickest way to confirm the screen
@@ -183,6 +183,9 @@ Check it reaches the process with `tr '\0' '\n' < /proc/$(pgrep -f teams-for-lin
   all three dismiss the overlay.
 - A call with no number and no usable name is not reported at all, since there
   would be nothing to show.
+- For a number missing from Aurora's directory, a `phonebook.csv` name is shown
+  regardless of `InfoScreen.CallerId.UnknownNumber`, since Aurora treats it as
+  the caller's name. When Clio only knows the number, that setting decides.
 - Warnings name the likely cause: a 409 means `InfoScreen.CallerId` is off, and
   a 401/403 means the key or its scopes are wrong.
 
