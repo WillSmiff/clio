@@ -27,6 +27,8 @@ MONITOR_RULES = [
     "member='ActionInvoked'",
 ]
 PHONE_PATTERN = re.compile(r"(?<!\w)(?:\+|00)\s*\d[\d\s().-]{4,}\d(?!\w)")
+#: A number Teams for Linux passed to the command hook with its `+` removed.
+STRIPPED_INTERNATIONAL_PATTERN = re.compile(r"[1-9][\d\s().-]*")
 TEAMS_FOR_LINUX_NAMES = {"microsoft teams for linux", "teams for linux"}
 GENERIC_CALLER_LABELS = {
     "incoming call",
@@ -119,6 +121,23 @@ def incoming_call_identity(caller, text, phonebook):
     if meaningful_name(text):
         return Caller(text, None)
     return Caller(CALLER_ID_UNAVAILABLE, None)
+
+
+def restore_plus(value):
+    """
+    Put back the `+` that Teams for Linux strips from command-hook arguments.
+
+    It drops every Unicode symbol, `+` included, before running the command,
+    so "+31 6 1234 5678" arrives as "31 6 1234 5678". A value of nothing but
+    digits and separators that does not start with 0 can only be such a number;
+    national (`0...`) and `00...` numbers keep their digits and are left alone.
+    """
+    value = (value or "").strip()
+    if STRIPPED_INTERNATIONAL_PATTERN.fullmatch(value) and 7 <= len(
+        normalize_number(value)
+    ) <= 15:
+        return f"+{value}"
+    return value
 
 
 def incoming_call_caller(caller, text, phonebook):
@@ -409,8 +428,8 @@ async def run_monitor(phonebook, aurora=None):
 
 
 def run_incoming_call_command(arguments, phonebook, aurora=None):
-    caller = arguments[0] if arguments else ""
-    text = arguments[1] if len(arguments) > 1 else ""
+    caller = restore_plus(arguments[0] if arguments else "")
+    text = restore_plus(arguments[1] if len(arguments) > 1 else "")
     identity = incoming_call_identity(caller, text, phonebook)
     log_call_message(f"Incoming call from {identity.display}")
 
