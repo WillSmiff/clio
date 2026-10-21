@@ -1,0 +1,36 @@
+services:
+  clio:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: clio-teams:latest
+    restart: unless-stopped
+    init: true
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    shm_size: 1gb
+    environment:
+      AURORA_URL: ${AURORA_URL:?set AURORA_URL in docker/.env}
+      AURORA_API_KEY_FILE: /run/secrets/aurora_api_key
+      VNC_PASSWORD_FILE: /run/secrets/vnc_password
+    secrets:
+      - aurora_api_key
+      - vnc_password
+    volumes:
+      # The Teams sign-in session. Treat it like a password.
+      - teams-session:/home/clio/.config/teams-for-linux
+      - clio-logs:/var/log/clio
+      # Uncomment to add local names on top of Aurora's caller directory.
+      # - ./phonebook.csv:/opt/clio/phonebook.csv:ro
+    ports:
+      # noVNC, reachable from this host only. Use an SSH tunnel from elsewhere.
+      - "127.0.0.1:6080:6080"
+
+secrets:
+  aurora_api_key:
+    file: ./secrets/aurora_api_key
+  vnc_password:
+    file: ./secrets/vnc_password
+
+volumes:
+  teams-session:
+  clio-logs:

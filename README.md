@@ -197,6 +197,11 @@ The Aurora path is covered by standard-library tests:
 python3 -m unittest discover
 ```
 
+### Running in Docker
+
+Teams for Linux and Clio's command hook can also run together in a container,
+with no desktop session; see [docker/README.md](docker/README.md).
+
 ## Teams Bot
 An implementation of Clio for use as a registered Microsoft Teams calling bot.
 Microsoft exposes incoming-call notifications to the bot when a call is addressed it. 

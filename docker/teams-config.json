@@ -1,0 +1,9 @@
+{
+  "incomingCalls": {
+    "command": "/bin/sh",
+    "commandArgs": ["/opt/clio/clio-hook.sh"]
+  },
+  "performance": {
+    "disableGpu": true
+  }
+}

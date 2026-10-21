@@ -4,3 +4,5 @@ __pycache__/
 test_call_monitor.py
 test_teams_nixos_monitor.py
 test_aurora_client.py
+docker/.env
+docker/secrets/

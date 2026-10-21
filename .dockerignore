@@ -1,0 +1,9 @@
+# Only what the image needs; everything else (the virtualenv, tests, the
+# personal phonebook, secrets) stays out of the build context.
+*
+!teams_nixos_monitor.py
+!aurora_client.py
+!phonebook.py
+!docker/**
+docker/secrets/
+docker/.env
