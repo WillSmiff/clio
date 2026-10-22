@@ -8,6 +8,9 @@ services:
     init: true
     # Chromium needs more shared memory than Docker's 64 MB default.
     shm_size: 1gb
+    # A fresh /tmp on every start, so no display lock survives a restart.
+    tmpfs:
+      - /tmp
     environment:
       AURORA_URL: ${AURORA_URL:?set AURORA_URL in docker/.env}
       AURORA_API_KEY_FILE: /run/secrets/aurora_api_key
